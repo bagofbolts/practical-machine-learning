@@ -1,0 +1,165 @@
+---
+title: Human Activity Recognition using a Random Forest Model
+author: "Kelvin DeCosta"
+output:
+  html_document:
+    fig_height: 9
+    fig_width: 9
+---
+
+## Introduction
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively.
+These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks.
+One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.  
+
+In this project, we will use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants to predict the manner in which they did the exercise.  
+
+### Setup
+
+```{r, cache = TRUE, message=FALSE}
+# Load libraries
+library(caret)
+library(corrplot)
+library(randomForest)
+library(rpart)
+library(rpart.plot)
+```
+
+## Data Preprocessing
+
+### Downloading
+
+The data used in this project came from [this source](http://groupware.les.inf.puc-rio.br/har).
+
+```{r, cache = TRUE}
+train_url <-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+test_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+train_path <- "./data/pml-training.csv"
+test_path  <- "./data/pml-testing.csv"
+
+if (!file.exists("./data")) {
+  dir.create("./data")
+}
+
+if (!file.exists(train_path)) {
+  download.file(train_url, destfile=train_path, method="curl")
+}
+
+if (!file.exists(test_path)) {
+  download.file(test_url, destfile=test_path, method="curl")
+}
+```
+
+### Reading
+
+Let us read the two files.
+
+```{r, cache = TRUE}
+train_raw <- read.csv("./data/pml-training.csv")
+test_raw <- read.csv("./data/pml-testing.csv")
+dim(train_raw)
+dim(test_raw)
+```
+
+This dataset contains 19,622 and 20 observations of 160 features that are split into a train and test set.
+Our goal is to predict `classe`.
+
+### Cleaning
+
+First, we discard all features that contain `NA`, i.e., missing values.
+
+```{r, cache = TRUE}
+train_raw <- train_raw[, colSums(is.na(train_raw)) == 0] 
+test_raw <- test_raw[, colSums(is.na(test_raw)) == 0] 
+```
+
+Next, we discard features that are unrelated to the accelerometers.
+
+```{r, cache = TRUE}
+classe <- train_raw$classe
+
+discard_columns <- grepl("^X|timestamp|window", names(train_raw))
+train_raw <- train_raw[, !discard_columns]
+train_cleaned <- train_raw[, sapply(train_raw, is.numeric)]
+
+train_cleaned$classe <- classe
+discard_columns <- grepl("^X|timestamp|window", names(test_raw))
+test_raw <- test_raw[, !discard_columns]
+test_cleaned <- test_raw[, sapply(test_raw, is.numeric)]
+```
+
+This cleaned dataset contains 19622 and 20 observations of just 53 features.
+
+### Splitting
+
+Since we will perform predictions on the `test_cleaned` data, we require a different dataset for cross-validation.
+We will split the large `train_cleaned` data into training (75%) and validation (25%) sets.
+
+```{r, cache = TRUE}
+set.seed(42)
+split_index <- createDataPartition(train_cleaned$classe, p=0.75, list=FALSE)
+train_data <- train_cleaned[split_index, ]
+test_data <- train_cleaned[-split_index, ]
+```
+
+## Model
+
+We design a predictive model for human activity recognition using the **Random Forest** algorithm.
+
+A few justifications for this choice of model are:
+
+- that it can select important features automatically, and
+- that it is robust to correlated features and outliers.
+
+We will use _5-fold_ cross validation when applying the algorithm.
+
+```{r, cache = TRUE}
+control_rand_forest <- trainControl(method="cv", 5)
+rand_forest_model <- train(classe ~ ., data=train_data, method="rf", trControl=control_rand_forest, ntree=128)
+rand_forest_model
+```
+
+We can estimate the performance of this model by preforming some predictions on the validation set.
+
+```{r, cache = TRUE}
+predictions <- predict(rand_forest_model, test_data)
+conf_matrix <- confusionMatrix(predictions, as.factor(test_data$classe))
+conf_matrix
+```
+
+```{r, cache = TRUE}
+accuracy <- postResample(predictions, as.factor(test_data$classe))
+accuracy
+out_of_sample_err <- 1 - as.numeric(conf_matrix$overall[1])
+out_of_sample_err
+```
+
+## Testing
+
+Finally, we perform predictions on the original test data.
+
+```{r, cache = TRUE}
+result <- predict(rand_forest_model, test_cleaned[, -length(names(test_cleaned))]) # Discard `problem_id`.
+result
+```
+
+## Conclusion
+
+We designed a Random Forest model that achieved an accuracy of 99.2% and had an out of sample error rate of 0.7%.
+
+## Appendix
+
+### 1. Correlation Matrix of Features
+
+```{r, cache = TRUE}
+corrPlot <- cor(train_data[, -length(names(train_data))])
+corrplot(corrPlot, method="color", type = "upper")
+```
+
+### 2. Decision Tree
+
+```{r, cache = TRUE}
+treeModel <- rpart(classe ~ ., data=train_data, method="class")
+prp(treeModel)
+```
